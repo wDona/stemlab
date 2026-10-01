@@ -7,7 +7,7 @@
   import Score from "./Score.svelte";
   import MiniMixer from "./MiniMixer.svelte";
   import Transport from "./Transport.svelte";
-  import { DecodeError, Player } from "./player";
+  import { CLICK, DecodeError, Player } from "./player";
   import Waveform from "./Waveform.svelte";
 
   let { song, jobFor, ontranscribe }: {
@@ -30,6 +30,11 @@
   let showMini = $state(false); // tira compacta de volúmenes sobre la barra
   let rollSpeed = $state(2.5); // segundos de notas visibles en el piano roll
   let scoreFollow = $state(true);
+  // metrónomo: factor corrige al detector (suele dar la mitad o el doble), shift mueve el acento al "1"
+  let metro = $state({ on: false, volume: 0.7, factor: 1, meter: 4, shift: 0 });
+  let beatData = $state<{ bpm: number; beats: number[] } | null>(null);
+  let beatsLoading = $state(false);
+  let beatsError = $state("");
   type Tab = "mix" | "roll" | "score";
   const TABS: [Tab, string][] = [["mix", "Mezclador"], ["roll", "Piano roll"], ["score", "Partitura"]];
   let tab = $state<Tab>("mix");
@@ -94,19 +99,23 @@
   const notesBusy = (stem: string) => !!jobFor(stem) && !jobFor(stem)?.error;
 
   $effect(() => {
-    // solo al montar (el padre usa {#key song.id}); que llegue una partitura nueva no recarga el audio
-    const s = untrack(() => song);
-    loading = true;
-    loadError = "";
-    playing = false;
-    time = 0;
-    for (const st of s.stems) {
-      volume[st.name] = 1;
-      muted[st.name] = !st.present;
-      solo[st.name] = false;
-    }
-    restore(s);
-    load(s);
+    // solo al montar (el padre usa {#key song.id}). Todo el cuerpo va en untrack: cualquier lectura de estado aquí
+    // (s.stems, $state.snapshot(metro) dentro de restore…) lo volvería a ejecutar, recargando el audio
+    // y restaurando ajustes viejos encima de lo que acabas de tocar.
+    untrack(() => {
+      const s = song;
+      loading = true;
+      loadError = "";
+      playing = false;
+      time = 0;
+      for (const st of s.stems) {
+        volume[st.name] = 1;
+        muted[st.name] = !st.present;
+        solo[st.name] = false;
+      }
+      restore(s);
+      load(s);
+    });
     return () => player.stop();
   });
 
@@ -116,7 +125,15 @@
 
   async function restore(s: Song) {
     const [view, global] = await Promise.all([
-      readJson(viewPath(s), { volume: {}, muted: {}, solo: {}, rollHidden: {}, scoreHidden: {}, tab: "mix" as Tab }),
+      readJson(viewPath(s), {
+        volume: {},
+        muted: {},
+        solo: {},
+        rollHidden: {},
+        scoreHidden: {},
+        tab: "mix" as Tab,
+        metro: $state.snapshot(metro),
+      }),
       readJson(SETTINGS, { masterVolume: 1, showMini: false, rollSpeed: 2.5, scoreFollow: true }),
     ]);
     Object.assign(volume, view.volume);
@@ -125,6 +142,7 @@
     Object.assign(rollHidden, view.rollHidden);
     Object.assign(scoreHidden, view.scoreHidden);
     tab = view.tab;
+    Object.assign(metro, view.metro);
     masterVolume = global.masterVolume;
     showMini = global.showMini;
     rollSpeed = global.rollSpeed;
@@ -136,7 +154,7 @@
   $effect(() => {
     if (!restored) return;
     const s = untrack(() => song);
-    const view = $state.snapshot({ volume, muted, solo, rollHidden, scoreHidden, tab });
+    const view = $state.snapshot({ volume, muted, solo, rollHidden, scoreHidden, tab, metro });
     const global = { masterVolume, showMini, rollSpeed, scoreFollow };
     flush = () => {
       flush = null;
@@ -184,6 +202,49 @@
 
   $effect(() => player.setMaster(masterVolume));
 
+  // pulsos: se piden al motor la primera vez que se enciende el metrónomo (CPU, unos segundos)
+  $effect(() => {
+    if (!metro.on || beatData || beatsLoading) return;
+    const s = untrack(() => song);
+    beatsLoading = true;
+    beatsError = "";
+    (s.beats ? Promise.resolve() : engine(["beats", s.id]))
+      .then(() => readJson(`${s.dir}/beats.json`, { bpm: 0, beats: [] as number[] }))
+      .then((b) => {
+        if (!b.beats.length) throw new Error("no se detectaron pulsos");
+        beatData = b;
+      })
+      .catch((e) => {
+        beatsError = String(e);
+        log(`metrónomo ${s.id}: ${beatsError}`);
+        metro.on = false;
+      })
+      .finally(() => (beatsLoading = false));
+  });
+
+  const metroBeats = $derived.by(() => {
+    const b = beatData?.beats ?? [];
+    if (metro.factor === 0.5) return b.filter((_, i) => i % 2 === 0);
+    if (metro.factor === 2) return b.flatMap((t, i) => (i + 1 < b.length ? [t, (t + b[i + 1]) / 2] : [t]));
+    return b;
+  });
+
+  // la pista de clics se rehace al cambiar pulsos, compás o acento (no con el volumen)
+  $effect(() => {
+    if (loading || !beatData) return;
+    const beats = metroBeats;
+    const { meter, shift } = metro;
+    untrack(() => {
+      try {
+        player.setClicks(beats, (i) => (((i - shift) % meter) + meter) % meter === 0);
+        log(`metrónomo: ${beats.length} pulsos`);
+      } catch (e) {
+        beatsError = String(e);
+        log(`metrónomo setClicks: ${e}`);
+      }
+    });
+  });
+
   // ganancia efectiva: si hay algún solo, solo suenan esas pistas
   $effect(() => {
     if (loading) return;
@@ -192,6 +253,7 @@
       const on = anySolo ? solo[st.name] : !muted[st.name];
       player.setGain(st.name, on ? volume[st.name] : 0);
     }
+    player.setGain(CLICK, metro.on && beatData ? metro.volume : 0);
   });
 
   $effect(() => {
@@ -218,12 +280,15 @@
 
   function onkey(e: KeyboardEvent) {
     const t = e.target as HTMLElement;
-    if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey || e.altKey) return;
+    // solo se ignoran los campos donde se escribe; tras arrastrar un deslizador el foco se queda en él
+    const typing = t instanceof HTMLTextAreaElement || (t instanceof HTMLInputElement && !["range", "checkbox"].includes(t.type));
+    if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.code === "Space") toggle();
     else if (e.key === "ArrowLeft") player.seek(time - 5);
     else if (e.key === "ArrowRight") player.seek(time + 5);
     else if (e.key === "1" || e.key === "2" || e.key === "3") go(TABS[+e.key - 1][0]);
     else if (e.key === "v" || e.key === "V") showMini = !showMini;
+    else if (e.key === "m" || e.key === "M") metro.on = !metro.on;
     else return;
     e.preventDefault();
   }
@@ -271,7 +336,7 @@
         {#if id !== "mix" && !(id === "roll" ? rollTracks.length : scored.length)}<span class="empty-dot" title="Sin notas todavía"></span>{/if}
       </button>
     {/each}
-    <span class="keys">Espacio ▶︎ · ← → 5 s · 1 2 3 pestañas · V volúmenes</span>
+    <span class="keys">Espacio ▶︎ · ← → 5 s · 1 2 3 pestañas · V volúmenes · M metrónomo</span>
   </nav>
 
   <div class="content" class:fill={tab !== "mix"}>
@@ -280,6 +345,35 @@
     {:else if loading}
       <div class="loading"><div class="spinner"></div> {converting ? "Convirtiendo a un formato compatible…" : "Cargando pistas…"}</div>
     {:else if tab === "mix"}
+      <section class="metro" class:on={metro.on}>
+        <button class="toggle" role="switch" aria-checked={metro.on} onclick={() => (metro.on = !metro.on)} title="Metrónomo (M)">
+          <span class="switch"><span class="knob"></span></span>
+          <strong>Metrónomo</strong>
+        </button>
+        {#if beatsLoading}
+          <small>Detectando pulsos…</small>
+        {:else if beatsError}
+          <small class="err" title={beatsError}>No se pudo: {beatsError}</small>
+        {:else if beatData}
+          <small>{Math.round(beatData.bpm * metro.factor)} BPM</small>
+        {:else}
+          <small>sigue los pulsos de la canción</small>
+        {/if}
+        <input type="range" min="0" max="1.5" step="0.01" bind:value={metro.volume} title="Volumen del metrónomo" />
+        <div class="seg" title="Si va a la mitad o al doble de rápido que la canción">
+          {#each [[0.5, "×½"], [1, "×1"], [2, "×2"]] as [f, label] (f)}
+            <button class:active={metro.factor === f} onclick={() => (metro.factor = +f)}>{label}</button>
+          {/each}
+        </div>
+        <div class="seg" title="Compás: cada cuántos pulsos suena el acento">
+          {#each [3, 4] as m (m)}
+            <button class:active={metro.meter === m} onclick={() => ((metro.meter = m), (metro.shift %= m))}>{m}/4</button>
+          {/each}
+        </div>
+        <button class="ghost shift" onclick={() => (metro.shift = (metro.shift + 1) % metro.meter)} title="Mueve el clic fuerte un pulso para que caiga en el 1">
+          Mover acento
+        </button>
+      </section>
       <section class="lanes">
         {#each song.stems as st (st.name)}
           {@const info = STEM_INFO[st.name] ?? { label: st.name, color: "#aaa" }}
@@ -391,6 +485,29 @@
   .chip.off { opacity: 0.45; text-decoration: line-through; background: transparent; border-color: var(--line); }
   .notes.done { color: var(--text-3); }
   .go { padding: 10px 20px; border-radius: 10px; border: 0; background: var(--accent-grad); color: white; font-weight: 600; cursor: pointer; }
+
+  .metro {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .metro.on { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+  .metro small { color: var(--text-3); font-size: 12px; min-width: 70px; }
+  .metro small.err { color: #ff8a8a; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .metro input { width: 110px; }
+  .toggle {
+    display: flex; align-items: center; gap: 10px; padding: 6px 10px 6px 6px; margin: -6px 0 -6px -6px;
+    border: 0; border-radius: 9px; background: transparent; color: var(--text); font: inherit; cursor: pointer;
+  }
+  .toggle:hover { background: var(--panel-hi); }
+  .switch { width: 34px; height: 20px; border-radius: 10px; background: var(--line); position: relative; flex-shrink: 0; display: block; }
+  .switch .knob { position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--text-2); transition: left 0.15s, background 0.15s; }
+  .metro.on .switch { background: var(--accent); }
+  .metro.on .switch .knob { left: 17px; background: white; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { padding: 4px 9px; border: 0; background: transparent; color: var(--text-2); font-size: 12px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.active { background: var(--panel-hi); color: var(--text); font-weight: 600; }
+  .shift { padding: 4px 10px; font-size: 12px; }
 
   .lanes { display: flex; flex-direction: column; gap: 8px; }
   .lane {

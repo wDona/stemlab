@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
+/** Nombre de la pista de clics del metrónomo dentro del reproductor. */
+export const CLICK = "__click";
+
 export class DecodeError extends Error {
   constructor(public track: string) {
     super(`${track}: no se pudo decodificar`);
@@ -46,6 +49,32 @@ export class Player {
     return g;
   }
 
+  /** Metrónomo: sintetiza una pista de clics (pulsos en segundos) y la suma como una pista más,
+   * así va sincronizada con play, pausa y saltos sin hacer nada especial. */
+  setClicks(beats: number[], accent: (i: number) => boolean) {
+    const rate = 22050;
+    const len = Math.max(1, Math.ceil(this.duration * rate));
+    const buf = this.ctx.createBuffer(1, len, rate);
+    const d = buf.getChannelData(0);
+    const n = Math.floor(0.035 * rate);
+    beats.forEach((b, i) => {
+      const strong = accent(i);
+      const f = strong ? 1760 : 1100;
+      const amp = strong ? 0.9 : 0.5;
+      const start = Math.floor(b * rate);
+      for (let k = 0; k < n && start + k < len; k++) {
+        d[start + k] += amp * Math.sin((2 * Math.PI * f * k) / rate) * Math.exp(-k / (rate * 0.007));
+      }
+    });
+    const was = this.playing;
+    const t = this.time();
+    this.stopSources();
+    this.buffers.set(CLICK, buf);
+    if (!this.gains.has(CLICK)) this.gains.set(CLICK, this.gainNode());
+    this.offset = t;
+    if (was) this.play();
+  }
+
   setMaster(value: number) {
     this.master.gain.setTargetAtTime(value, this.ctx.currentTime, 0.015);
   }
@@ -89,8 +118,10 @@ export class Player {
     if (was) this.play();
   }
 
+  /** Crea el nodo si aún no existe: así el volumen fijado antes de cargar una pista (p. ej. el metrónomo) no se pierde. */
   setGain(name: string, value: number) {
-    this.gains.get(name)?.gain.setTargetAtTime(value, this.ctx.currentTime, 0.015);
+    if (!this.gains.has(name)) this.gains.set(name, this.gainNode());
+    this.gains.get(name)!.gain.setTargetAtTime(value, this.ctx.currentTime, 0.015);
   }
 
   private stopSources() {

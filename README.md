@@ -5,7 +5,7 @@ Separa canciones en pistas (voz, batería, bajo, guitarra, piano, otros) y saca 
 - **Separación**: BS-RoFormer para la voz y BS-Roformer-SW para los instrumentos (vía `audio-separator`, en GPU).
 - **Entrada**: cualquier audio/vídeo que lea ffmpeg, o búsqueda / enlace de YouTube y demás webs de `yt-dlp`.
 - **Biblioteca**: carpetas, reordenar arrastrando, menús con clic derecho, borrar canciones.
-- **Vista de canción**: pestañas Mezclador / Piano roll / Partitura con la barra de reproducción siempre visible, volumen general y mini-mezclador por instrumento. Los ajustes (volúmenes, M/S, qué se ve) se guardan por canción.
+- **Vista de canción**: pestañas Mezclador / Piano roll / Partitura con la barra de reproducción siempre visible, volumen general, mini-mezclador por instrumento y metrónomo que sigue los pulsos reales (librosa). Los ajustes (volúmenes, M/S, qué se ve) se guardan por canción.
 - **Notas**: transcripción con basic-pitch (ONNX, CPU) a MusicXML + MIDI. Partitura de conjunto (un pentagrama por instrumento, OpenSheetMusicDisplay) que se pinta al reproducir y se exporta a PDF; piano roll estilo Synthesia. Ambos a pantalla completa.
 - **Letra**: Whisper sobre la voz aislada, sílabas (pyphen) repartidas bajo cada nota de la partitura de voz.
 - Las operaciones de IA van a una cola en segundo plano; una sola a la vez en la GPU (`flock`).

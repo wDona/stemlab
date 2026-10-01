@@ -11,7 +11,15 @@ export type Stem = {
   notes?: number;
   version?: number; // hora de la última transcripción
 };
-export type Song = { id: string; title: string; dir: string; mix: string; bpm?: number; stems: Stem[] };
+export type Song = {
+  id: string;
+  title: string;
+  dir: string;
+  mix: string;
+  bpm?: number;
+  beats?: string; // pulsos para el metrónomo (beats.json)
+  stems: Stem[];
+};
 
 /** Pistas con altura de tono: la batería no se transcribe. */
 export const PITCHED = ["vocals", "bass", "guitar", "piano", "other"];

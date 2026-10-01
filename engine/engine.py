@@ -5,6 +5,7 @@
     engine.py transcribe <song_id> <pista>  notas -> MusicXML + MIDI en scores/
     engine.py fix <song_id>      reconvierte mezcla y pistas a WAV que la app pueda reproducir
     engine.py ensemble <song_id> <pista>...  partitura conjunta de pistas ya transcritas
+    engine.py beats <song_id>      pulsos para el metrónomo
     engine.py delete <song_id>     borra la canción del disco
     engine.py list               canciones ya procesadas
 """
@@ -427,6 +428,24 @@ def with_dir(meta):
     return {**meta, "dir": str(SONGS / meta["id"])}
 
 
+def beats(song_id):
+    """Pulsos de la canción (segundos) para el metrónomo. CPU, unos segundos; se guarda en beats.json."""
+    import librosa
+    import numpy as np
+
+    out = SONGS / song_id
+    meta_path = out / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    y, sr = librosa.load(str(out / meta["mix"]), sr=22050, mono=True)
+    tempo, times = librosa.beat.beat_track(y=y, sr=sr, units="time")
+    bpm = round(float(np.atleast_1d(tempo)[0]))
+    (out / "beats.json").write_text(json.dumps({"bpm": bpm, "beats": [round(float(t), 3) for t in times]}))
+    meta["beats"] = "beats.json"
+    meta.setdefault("bpm", bpm)  # si ya hay partituras, su tempo manda
+    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+    emit("done", song=with_dir(meta), bpm=bpm, beats=len(times))
+
+
 def delete(song_id):
     """Borra la canción entera (mezcla, pistas, partituras)."""
     import shutil
@@ -445,7 +464,7 @@ def list_songs():
 
 def main():
     cmd, *args = sys.argv[1:] or ["list"]
-    commands = {"separate": separate, "fix": fix, "list": list_songs, "search": search, "transcribe": transcribe, "delete": delete, "ensemble": ensemble}
+    commands = {"separate": separate, "fix": fix, "list": list_songs, "search": search, "transcribe": transcribe, "delete": delete, "ensemble": ensemble, "beats": beats}
     try:
         if cmd not in commands:
             raise ValueError(f"subcomando desconocido: {cmd}")
