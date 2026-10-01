@@ -7,19 +7,17 @@
   type Note = [start: number, end: number, pitch: number, velocity: number];
   type Track = { stem: string; name: string; color: string; path: string; hidden: boolean };
 
-  let { player, tracks, controls, ontoggle, onclose }: {
+  let { player, tracks, controls, ontoggle, windowSec = $bindable(2.5) }: {
     player: Player;
     tracks: Track[];
     controls: Snippet; // transporte, para la pantalla completa
     ontoggle: (stem: string) => void;
-    onclose: () => void;
+    windowSec?: number; // segundos visibles por encima del teclado: más = notas más lentas
   } = $props();
 
   const KEYS_H = 90;
   let fullscreen = $state(false);
-  let windowSec = $state(2.5); // segundos visibles por encima del teclado: más = notas más lentas
-  let fsHeight = $state(0);
-  const height = $derived(fullscreen ? fsHeight : 380);
+  let height = $state(0); // ocupa todo el alto que le dejen (pestaña o pantalla completa)
 
   function setFullscreen(on: boolean) {
     fullscreen = on;
@@ -168,17 +166,16 @@
       <button class="ghost" onclick={() => setFullscreen(!fullscreen)} title={fullscreen ? "Salir (Esc)" : "Pantalla completa"}>
         {fullscreen ? "Salir" : "⛶ Pantalla completa"}
       </button>
-      {#if !fullscreen}<button class="ghost" onclick={onclose} aria-label="Cerrar">×</button>{/if}
     </div>
   </header>
-  <div class="stage" bind:clientWidth={width} bind:clientHeight={fsHeight}>
+  <div class="stage" bind:clientWidth={width} bind:clientHeight={height}>
     <canvas bind:this={canvas} style:height="{height}px"></canvas>
   </div>
   {#if fullscreen}<footer>{@render controls()}</footer>{/if}
 </section>
 
 <style>
-  .roll { margin-top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .roll { flex: 1; min-height: 240px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
   header { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); }
   .legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
   .chip {
@@ -196,6 +193,6 @@
   canvas { width: 100%; display: block; }
 
   .fs { position: fixed; inset: 0; z-index: 50; margin: 0; border: 0; border-radius: 0; display: flex; flex-direction: column; }
-  .fs .stage { flex: 1; min-height: 0; overflow: hidden; }
+  .stage { flex: 1; min-height: 0; overflow: hidden; }
   footer { padding: 12px 16px; border-top: 1px solid var(--line); }
 </style>

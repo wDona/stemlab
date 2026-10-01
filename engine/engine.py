@@ -4,6 +4,7 @@
     engine.py search <texto|url>   busca en YouTube
     engine.py transcribe <song_id> <pista>  notas -> MusicXML + MIDI en scores/
     engine.py fix <song_id>      reconvierte mezcla y pistas a WAV que la app pueda reproducir
+    engine.py ensemble <song_id> <pista>...  partitura conjunta de pistas ya transcritas
     engine.py delete <song_id>     borra la canción del disco
     engine.py list               canciones ya procesadas
 """
@@ -271,10 +272,10 @@ def assign_lyrics(notes, words, lang):
     return out
 
 
-def notes_to_score(notes, bpm, cfg, title, lyrics=None):
-    """Notas (inicio s, fin s, midi, ...) -> partitura music21 en 4/4 cuantizada a GRID.
+def notes_to_part(notes, bpm, cfg, lyrics=None):
+    """Notas (inicio s, fin s, midi, ...) de un instrumento -> pentagrama music21 cuantizado a GRID.
     `lyrics`: {índice de nota: (texto, syllabic)}, se escribe bajo cada nota."""
-    from music21 import chord, instrument, meter, metadata, note, stream, tempo
+    from music21 import chord, instrument, meter, note, stream
 
     lyrics = lyrics or {}
     q = lambda t: round(float(t) * bpm / 60 * GRID) / GRID  # segundos -> negras en la rejilla
@@ -288,9 +289,10 @@ def notes_to_score(notes, bpm, cfg, title, lyrics=None):
     onsets = sorted(groups)
 
     part = stream.Part()
-    part.insert(0, getattr(instrument, cfg["instrument"])())
+    inst = getattr(instrument, cfg["instrument"])()
+    inst.partName = part.partName = cfg["name"]  # la app lo usa para colorear cada pentagrama
+    part.insert(0, inst)
     part.insert(0, meter.TimeSignature("4/4"))
-    part.insert(0, tempo.MetronomeMark(number=bpm))
     for i, on in enumerate(onsets):
         pitches = sorted({p for p, _ in groups[on]})
         dur = min(d for _, d in groups[on])
@@ -302,15 +304,52 @@ def notes_to_score(notes, bpm, cfg, title, lyrics=None):
             text, kind = sung[on]
             el.lyrics.append(note.Lyric(text=text, syllabic=kind))
         part.insert(on, el)
+    return part
+
+
+def build_score(parts, bpm, title):
+    """[(notas, cfg, lyrics)] -> partitura con un pentagrama por instrumento, alineados por compás."""
+    from music21 import metadata, stream, tempo
 
     score = stream.Score()
-    score.metadata = metadata.Metadata(title=title, composer=cfg["name"])
-    score.insert(0, part)
+    score.metadata = metadata.Metadata(title=title, composer=" · ".join(cfg["name"] for _, cfg, _ in parts))
+    built = [notes_to_part(n, bpm, cfg, ly) for n, cfg, ly in parts]
+    built[0].insert(0, tempo.MetronomeMark(number=bpm))
+    for part in built:
+        score.insert(0, part)
     try:
-        part.insert(0, score.analyze("key"))  # armadura: menos alteraciones sueltas
+        key = score.analyze("key")  # armadura común: menos alteraciones sueltas
+        for part in built:
+            part.insert(0, key.__class__(key.tonic, key.mode))
     except Exception:
         pass
     return score.makeNotation()
+
+
+def notes_to_score(notes, bpm, cfg, title, lyrics=None):
+    return build_score([(notes, cfg, lyrics)], bpm, title)
+
+
+def ensemble(song_id, *stems):
+    """Partitura de varios instrumentos ya transcritos (sin IA: usa las notas guardadas)."""
+    out = SONGS / song_id
+    meta = json.loads((out / "meta.json").read_text())
+    by_name = {s["name"]: s for s in meta["stems"]}
+    parts = []
+    for stem in stems:
+        info = by_name.get(stem) or {}
+        if not info.get("roll"):
+            raise ValueError(f"{stem} no tiene notas: sácalas desde el mezclador")
+        notes = json.loads((out / info["roll"]).read_text())
+        lyrics = None
+        lyr_file = out / "scores" / f"{stem}.lyrics.json"
+        if lyr_file.exists():
+            lyr = json.loads(lyr_file.read_text())
+            lyrics = assign_lyrics(notes, lyr["words"], lyr["language"])
+        parts.append((notes, TRANSCRIBE[stem], lyrics))
+    path = out / "scores" / f"view-{'+'.join(stems)}.musicxml"
+    build_score(parts, meta.get("bpm") or 120, meta["title"]).write("musicxml", fp=str(path))
+    emit("done", path=str(path))
 
 
 def transcribe(song_id, stem):
@@ -406,7 +445,7 @@ def list_songs():
 
 def main():
     cmd, *args = sys.argv[1:] or ["list"]
-    commands = {"separate": separate, "fix": fix, "list": list_songs, "search": search, "transcribe": transcribe, "delete": delete}
+    commands = {"separate": separate, "fix": fix, "list": list_songs, "search": search, "transcribe": transcribe, "delete": delete, "ensemble": ensemble}
     try:
         if cmd not in commands:
             raise ValueError(f"subcomando desconocido: {cmd}")

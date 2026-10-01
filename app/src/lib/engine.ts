@@ -47,3 +47,19 @@ export const STEM_INFO: Record<string, { label: string; color: string }> = {
 
 /** Escribe en la terminal de la app (stderr de Rust). */
 export const log = (msg: string) => void invoke("log", { msg });
+
+/** JSON de /data/stemlab; `fallback` si no existe o está roto. */
+export async function readJson<T>(path: string, fallback: T): Promise<T> {
+  try {
+    return { ...fallback, ...JSON.parse(new TextDecoder().decode(await invoke<ArrayBuffer>("read_file", { path }))) };
+  } catch {
+    return fallback;
+  }
+}
+
+export const writeJson = (path: string, data: unknown) =>
+  invoke("write_file", new TextEncoder().encode(JSON.stringify(data, null, 1)), {
+    headers: { path: encodeURIComponent(path) },
+  }).catch((e) => log(`guardar ${path}: ${e}`));
+
+export const SETTINGS = "/data/stemlab/settings.json";

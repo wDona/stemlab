@@ -37,4 +37,12 @@ for bad in ["..", "../models", "", "no-existe-zz"]:
     except ValueError:
         pass
 assert engine.MODELS.exists()
+
+# partitura de conjunto: un pentagrama por instrumento, con su nombre (la app colorea por él), mismos compases
+voz = [(0.0, 0.5, 64, 1), (0.5, 1.0, 65, 1)]
+bajo = [(0.0, 2.0, 40, 1)]
+score = engine.build_score([(voz, engine.TRANSCRIBE["vocals"], {0: ("la", "single")}), (bajo, engine.TRANSCRIBE["bass"], None)], 120, "t")
+assert [p.partName for p in score.parts] == ["Voz", "Bajo"]
+assert len(score.parts[0].getElementsByClass("Measure")) == len(score.parts[1].getElementsByClass("Measure")) == 1
+assert [n.lyric for n in score.parts[0].recurse().notes] == ["la", None]
 print("ok")

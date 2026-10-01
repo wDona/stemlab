@@ -185,7 +185,7 @@
 
   .app { display: flex; height: 100vh; }
   main {
-    flex: 1; overflow-y: auto; padding: 32px 36px;
+    flex: 1; overflow-y: auto; padding: 28px 36px 18px;
     background: radial-gradient(1200px 500px at 70% -10%, #2a1a4a55, transparent 60%);
   }
   .welcome { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }

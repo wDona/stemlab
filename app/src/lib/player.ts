@@ -9,6 +9,12 @@ export class DecodeError extends Error {
 /** Reproduce varias pistas sincronizadas: un AudioBufferSourceNode por pista, todas arrancadas en el mismo instante. */
 export class Player {
   ctx = new AudioContext();
+  /** Volumen general: todas las pistas pasan por aquí. */
+  private master = (() => {
+    const g = this.ctx.createGain();
+    g.connect(this.ctx.destination);
+    return g;
+  })();
   buffers = new Map<string, AudioBuffer>();
   gains = new Map<string, GainNode>();
   private sources: AudioBufferSourceNode[] = [];
@@ -36,8 +42,12 @@ export class Player {
 
   private gainNode() {
     const g = this.ctx.createGain();
-    g.connect(this.ctx.destination);
+    g.connect(this.master);
     return g;
+  }
+
+  setMaster(value: number) {
+    this.master.gain.setTargetAtTime(value, this.ctx.currentTime, 0.015);
   }
 
   time() {

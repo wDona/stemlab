@@ -7,14 +7,13 @@
   import { setWindowFullscreen } from "./fullscreen";
   import type { Player } from "./player";
 
-  let { song, stem, player, controls, busy, onredo, onclose }: {
+  let { song, stems, path, player, controls, follow = $bindable(true) }: {
     song: Song;
-    stem: Stem;
+    stems: Stem[]; // instrumentos visibles, un pentagrama cada uno
+    path: string; // MusicXML de conjunto que monta el motor
     player: Player;
     controls: Snippet; // transporte, para la pantalla completa
-    busy: boolean; // ya hay una transcripción de esta pista en cola
-    onredo: () => void;
-    onclose: () => void;
+    follow?: boolean; // desplazar la partitura con la reproducción
   } = $props();
 
   let container: HTMLDivElement;
@@ -25,10 +24,12 @@
   let error = $state("");
   let zoom = $state(0.8);
   let fullscreen = $state(false);
-  let follow = $state(true);
   let exporting = $state(false);
 
-  const info = $derived(STEM_INFO[stem.name]);
+  const labels = $derived(stems.map((s) => STEM_INFO[s.name].label).join(" + "));
+  const total = $derived(stems.reduce((n, s) => n + (s.notes ?? 0), 0));
+  // nombre del pentagrama (lo pone el motor) -> color del instrumento
+  const colorOf = $derived(new Map(stems.map((s) => [STEM_INFO[s.name].label, STEM_INFO[s.name].color])));
   const bpm = $derived(song.bpm ?? 120);
 
   // notas ya pintadas, para despintarlas al saltar hacia atrás o redibujar
@@ -54,18 +55,18 @@
   $effect(() => {
     // solo al montar: el padre lo recrea con {#key} si cambia la partitura; un `song` nuevo
     // (porque acabó otra transcripción) no debe crear un segundo OSMD en el mismo contenedor
-    const path = untrack(() => `${song.dir}/${stem.score}`);
+    const file = untrack(() => path);
     osmd = new OpenSheetMusicDisplay(container, {
       autoResize: false, // redibujamos nosotros: así el cursor no se pierde
       backend: "svg",
       drawTitle: false,
       drawComposer: false,
-      drawPartNames: false,
+      drawPartNames: untrack(() => stems.length > 1),
       drawingParameters: "compacttight",
       followCursor: false,
       cursorsOptions: [{ type: 1, color: "#8b5cff", alpha: 1, follow: false }],
     });
-    invoke<ArrayBuffer>("read_file", { path })
+    invoke<ArrayBuffer>("read_file", { path: file })
       .then((buf) => osmd!.load((xml = new TextDecoder().decode(buf))))
       .then(() => {
         draw();
@@ -102,9 +103,10 @@
       let moved = false;
       while (!o.cursor.Iterator.EndReached && o.cursor.Iterator.currentTimeStamp.RealValue <= beat) {
         for (const gn of o.cursor.GNotesUnderCursor()) {
+          const color = colorOf.get(gn.sourceNote.ParentStaff.ParentInstrument.Name) ?? "#8b5cff";
           const g = (gn as unknown as { getSVGGElement?: () => SVGGElement }).getSVGGElement?.();
           for (const el of g?.querySelectorAll<SVGElement>("path, rect") ?? []) {
-            paint(el, info.color);
+            paint(el, color);
             painted.push(el);
           }
         }
@@ -170,7 +172,7 @@
         if (i) pdf.addPage();
         await pdf.svg(pages[i], { x: 0, y: 0, width: w, height: h });
       }
-      const out = `${song.dir}/scores/${stem.name}.pdf`;
+      const out = `${song.dir}/scores/${stems.map((s) => s.name).join("+")}.pdf`;
       await invoke("write_file", new Uint8Array(pdf.output("arraybuffer")), {
         headers: { path: encodeURIComponent(out) },
       });
@@ -186,12 +188,12 @@
 
 <svelte:window onkeydown={(e) => e.key === "Escape" && fullscreen && setFullscreen(false)} />
 
-<section class="score" class:fs={fullscreen} style:--c={info.color}>
+<section class="score" class:fs={fullscreen}>
   <header>
     <div class="title">
-      <span class="dot"></span>
-      <strong>Partitura · {info.label}</strong>
-      <small>{stem.notes} notas · {bpm} BPM</small>
+      {#each stems as s (s.name)}<span class="dot" style:--c={STEM_INFO[s.name].color}></span>{/each}
+      <strong>{labels}</strong>
+      <small>{total} notas · {bpm} BPM</small>
     </div>
     <div class="tools">
       <label title="Desplazar la partitura para seguir la reproducción">
@@ -202,13 +204,9 @@
       <button class="ghost" onclick={() => setZoom(zoom + 0.1)} aria-label="Acercar">+</button>
       <button class="ghost" onclick={exportPdf} disabled={!ready || exporting}>{exporting ? "Exportando…" : "PDF"}</button>
       <button class="ghost" onclick={() => openPath(`${song.dir}/scores`)} title="MIDI, MusicXML y PDF">Carpeta</button>
-      <button class="ghost" onclick={onredo} disabled={busy} title="Volver a sacar notas{stem.name === 'vocals' ? ' y letra' : ''}">
-        {busy ? "En cola…" : "↻ Rehacer"}
-      </button>
       <button class="ghost" onclick={() => setFullscreen(!fullscreen)} title={fullscreen ? "Salir (Esc)" : "Pantalla completa"}>
         {fullscreen ? "Salir" : "⛶"}
       </button>
-      {#if !fullscreen}<button class="ghost" onclick={onclose} aria-label="Cerrar">×</button>{/if}
     </div>
   </header>
   {#if error}<p class="error">{error}</p>{/if}
@@ -221,20 +219,19 @@
 </section>
 
 <style>
-  .score { margin-top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .score { flex: 1; min-height: 240px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
   header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  .title { display: flex; align-items: center; gap: 10px; }
+  .title { display: flex; align-items: center; gap: 8px; }
   .title small { color: var(--text-3); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); }
   .tools { display: flex; align-items: center; gap: 6px; }
   .tools button { padding: 6px 12px; }
   .tools label { display: flex; align-items: center; gap: 5px; color: var(--text-2); font-size: 12px; margin-right: 6px; }
   .zoom { font-size: 12px; color: var(--text-2); min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
-  .paper { background: #fbfaf7; max-height: 60vh; overflow: auto; padding: 8px 0; position: relative; }
+  .paper { flex: 1; min-height: 0; background: #fbfaf7; overflow: auto; padding: 8px 0; position: relative; }
   .loading { padding: 24px; color: var(--text-2); }
   .error { color: #ff8a8a; padding: 0 14px; }
 
   .fs { position: fixed; inset: 0; z-index: 50; margin: 0; border: 0; border-radius: 0; display: flex; flex-direction: column; }
-  .fs .paper { flex: 1; max-height: none; min-height: 0; }
   footer { padding: 12px 16px; border-top: 1px solid var(--line); }
 </style>
