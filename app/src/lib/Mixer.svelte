@@ -1,7 +1,7 @@
 <script lang="ts">
   import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
   import { untrack } from "svelte";
-  import { engine, log, PITCHED, readJson, SETTINGS, STEM_INFO, writeJson, type Song } from "./engine";
+  import { engine, log, PITCHED, readJson, settingsPath, STEM_INFO, writeJson, type Song } from "./engine";
   import type { Job } from "./Library.svelte";
   import Roll from "./Roll.svelte";
   import Score from "./Score.svelte";
@@ -134,7 +134,7 @@
         tab: "mix" as Tab,
         metro: $state.snapshot(metro),
       }),
-      readJson(SETTINGS, { masterVolume: 1, showMini: false, rollSpeed: 2.5, scoreFollow: true }),
+      readJson(settingsPath(), { masterVolume: 1, showMini: false, rollSpeed: 2.5, scoreFollow: true }),
     ]);
     Object.assign(volume, view.volume);
     Object.assign(muted, view.muted);
@@ -159,7 +159,7 @@
     flush = () => {
       flush = null;
       void writeJson(viewPath(s), view);
-      void writeJson(SETTINGS, global);
+      void writeJson(settingsPath(), global);
     };
     const t = setTimeout(() => flush?.(), 500); // agrupa los movimientos de un deslizador
     return () => clearTimeout(t);

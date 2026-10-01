@@ -13,6 +13,31 @@ fn engine_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../engine")))
 }
 
+/// Carpeta de datos (modelos, canciones, ajustes). STEMLAB_DATA manda; si no, /data/stemlab si existe
+/// (instalaciones antiguas) y si no, $XDG_DATA_HOME/stemlab (~/.local/share/stemlab).
+fn data_dir() -> PathBuf {
+    static DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+        let dir = std::env::var("STEMLAB_DATA").map(PathBuf::from).unwrap_or_else(|_| {
+            let legacy = PathBuf::from("/data/stemlab");
+            if legacy.is_dir() {
+                return legacy;
+            }
+            std::env::var("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"))
+                .join("stemlab")
+        });
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::canonicalize(&dir).unwrap_or(dir)
+    });
+    DIR.clone()
+}
+
+#[tauri::command]
+fn data_dir_cmd() -> String {
+    data_dir().to_string_lossy().into_owned()
+}
+
 /// Procesos del motor en marcha, por id de trabajo, para poder cancelarlos.
 static RUNNING: LazyLock<Mutex<HashMap<String, Child>>> = LazyLock::new(Default::default);
 
@@ -52,6 +77,7 @@ fn run_engine(id: String, args: Vec<String>, on_event: Channel<Value>) -> Result
         return Err(format!("falta el entorno del motor: cd {} && uv sync", dir.display()));
     }
     let mut child = Command::new(python)
+        .env("STEMLAB_DATA", data_dir())
         .arg(dir.join("engine.py"))
         .args(&args)
         .stdout(Stdio::piped())
@@ -118,20 +144,20 @@ fn tqdm_pct(line: &str) -> Option<u32> {
     head.rsplit(' ').next()?.parse().ok()
 }
 
-/// Lee un fichero de /data/stemlab (audio, partituras) como bytes crudos (ArrayBuffer en JS).
+/// Lee un fichero de la carpeta de datos (audio, partituras) como bytes crudos (ArrayBuffer en JS).
 /// El asset protocol de WebKitGTK se atasca con WAVs grandes; el IPC binario no.
 #[tauri::command]
 fn read_file(path: String) -> Result<tauri::ipc::Response, String> {
     let path = std::fs::canonicalize(&path).map_err(|e| format!("{path}: {e}"))?;
-    if !path.starts_with("/data/stemlab") {
-        return Err(format!("fuera de /data/stemlab: {}", path.display()));
+    if !path.starts_with(data_dir()) {
+        return Err(format!("fuera de la carpeta de datos: {}", path.display()));
     }
     std::fs::read(&path)
         .map(tauri::ipc::Response::new)
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Escribe bytes crudos (cuerpo de la petición) en `path`, dentro de /data/stemlab.
+/// Escribe bytes crudos (cuerpo de la petición) en `path`, dentro de la carpeta de datos.
 /// La ruta va en la cabecera `path` codificada con encodeURIComponent.
 #[tauri::command]
 fn write_file(request: tauri::ipc::Request) -> Result<(), String> {
@@ -141,8 +167,8 @@ fn write_file(request: tauri::ipc::Request) -> Result<(), String> {
     let raw = request.headers().get("path").and_then(|v| v.to_str().ok()).ok_or("falta la cabecera path")?;
     let path = PathBuf::from(percent_decode(raw));
     let dir = path.parent().and_then(|d| std::fs::canonicalize(d).ok()).ok_or("carpeta inexistente")?;
-    if !dir.starts_with("/data/stemlab") {
-        return Err(format!("fuera de /data/stemlab: {}", path.display()));
+    if !dir.starts_with(data_dir()) {
+        return Err(format!("fuera de la carpeta de datos: {}", path.display()));
     }
     std::fs::write(dir.join(path.file_name().ok_or("sin nombre")?), data).map_err(|e| e.to_string())
 }
@@ -177,7 +203,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![engine, cancel, cancel_all, read_file, write_file, log])
+        .invoke_handler(tauri::generate_handler![engine, cancel, cancel_all, read_file, write_file, data_dir_cmd, log])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -219,6 +245,6 @@ mod tests {
         cancel("t3".into());
         assert_eq!(h.join().unwrap().unwrap_err(), "cancelado");
         assert!(read_file("/etc/passwd".into()).is_err());
-        assert!(read_file("/data/stemlab/../../etc/passwd".into()).is_err());
+        assert!(read_file(format!("{}/../../etc/passwd", data_dir().display())).is_err());
     }
 }

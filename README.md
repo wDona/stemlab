@@ -15,14 +15,30 @@ Separa canciones en pistas (voz, batería, bajo, guitarra, piano, otros) y saca 
 - `engine/`: motor Python (`engine.py`). Cada feature es un subcomando que emite JSON lines.
 - `app/`: Tauri v2 + SvelteKit. Rust lanza el motor y reenvía sus eventos por un `Channel`.
 
-Datos, modelos y canciones en `/data/stemlab`.
+Datos, modelos y canciones en la carpeta de datos (ver «Instalar»).
 
-## Requisitos (Linux)
+## Instalar (Linux)
 
-- GPU con ROCm (probado en RX 7700 XT, ROCm 7.2) o CUDA ajustando el índice de torch en `engine/pyproject.toml`.
-- `uv`, Node, Rust, `ffmpeg`, WebKitGTK 4.1 y `gst-plugins-good` (sin él, el audio del WebView no funciona).
+```sh
+git clone https://github.com/wDona/stemlab.git && cd stemlab
+./install.sh            # detecta la GPU: NVIDIA (CUDA), AMD (ROCm) o ninguna (CPU)
+```
 
-## Uso
+Compila la app, la instala en `~/.local/bin/stemlab` y añade **StemLab** al lanzador de aplicaciones
+(rofi, quickshell, GNOME, KDE…). No usa `sudo`: si falta algo del sistema, dice qué paquete instalar
+en Arch, Debian/Ubuntu o Fedora.
+
+- Opciones: `./install.sh --gpu cuda|rocm|cpu` para forzar la GPU, `./install.sh --uninstall` para quitarla
+  (las canciones no se borran).
+- Necesita: `uv`, Node + npm, Rust, `ffmpeg`, WebKitGTK 4.1 y `gst-plugins-good`.
+- No muevas la carpeta del repo después: el motor se ejecuta desde `engine/`. Para actualizar,
+  `git pull && ./install.sh`.
+- La primera separación y la primera letra descargan los modelos (~3 GB en total).
+- Datos (canciones, modelos, ajustes): `$STEMLAB_DATA` si está definida; si no, `/data/stemlab` si existe;
+  si no, `~/.local/share/stemlab`.
+- Sin GPU funciona todo, pero separar una canción tarda bastante más.
+
+## Desarrollo
 
 ```sh
 cd engine && uv sync

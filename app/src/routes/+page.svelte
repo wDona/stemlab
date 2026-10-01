@@ -3,7 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { ask, open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { engine, listSongs, log, STEM_INFO, type Song } from "$lib/engine";
+  import { engine, initPaths, listSongs, log, STEM_INFO, type Song } from "$lib/engine";
   import Library, { type Job } from "$lib/Library.svelte";
   import Mixer from "$lib/Mixer.svelte";
   import Search from "$lib/Search.svelte";
@@ -15,6 +15,7 @@
   let jobs = $state<Job[]>([]);
   let selected = $state<string | null>(null);
   let searching = $state(false);
+  let ready = $state(false);
   let dragging = $state(false);
   let busy = false;
 
@@ -23,6 +24,7 @@
   onMount(() => {
     // procesos de una carga anterior (recarga, hot reload): ya nadie los escucha
     void invoke("cancel_all");
+    initPaths().then(() => (ready = true));
     window.addEventListener("error", (e) => log(`error: ${e.message}`));
     window.addEventListener("unhandledrejection", (e) => log(`promesa: ${e.reason}`));
     listSongs().then((s) => {
@@ -111,50 +113,53 @@
   }
 </script>
 
-<div class="app">
-  <Library
-    {songs}
-    {jobs}
-    selected={searching ? null : selected}
-    {searching}
-    onselect={(id) => {
-      selected = id;
-      searching = false;
-    }}
-    onadd={pick}
-    onsearch={() => (searching = true)}
-    ondelete={deleteSong}
-    ondismiss={(j) => {
-      jobs.splice(jobs.indexOf(j), 1);
-      void invoke("cancel", { id: j.key }); // si estaba en marcha, mata el proceso
-    }}
-  />
-  <main>
-    {#if searching}
-      <Search onpick={(url, title) => enqueue([url], title)} queued={(url) => !!jobFor(["separate", url])} />
-    {:else if current}
-      {#key current.id}
-        <Mixer
-          song={current}
-          jobFor={(stem) => jobFor(["transcribe", current.id, stem])}
-          ontranscribe={(stem) => queue(["transcribe", current.id, stem], `Notas · ${STEM_INFO[stem].label} · ${current.title}`)}
-        />
-      {/key}
-    {:else}
-      <div class="welcome">
-        <h1>Separa cualquier canción en sus pistas</h1>
-        <p>Voz, batería, bajo, guitarra, piano y el resto. Todo en local, en tu GPU.</p>
-        <div class="cta">
-          <button onclick={pick}>Elegir audio</button>
-          <button class="ghost" onclick={() => (searching = true)}>Buscar en YouTube</button>
+<!-- nada se monta hasta saber la carpeta de datos (la biblioteca y los ajustes leen de ahí al montar) -->
+{#if ready}
+  <div class="app">
+    <Library
+      {songs}
+      {jobs}
+      selected={searching ? null : selected}
+      {searching}
+      onselect={(id) => {
+        selected = id;
+        searching = false;
+      }}
+      onadd={pick}
+      onsearch={() => (searching = true)}
+      ondelete={deleteSong}
+      ondismiss={(j) => {
+        jobs.splice(jobs.indexOf(j), 1);
+        void invoke("cancel", { id: j.key }); // si estaba en marcha, mata el proceso
+      }}
+    />
+    <main>
+      {#if searching}
+        <Search onpick={(url, title) => enqueue([url], title)} queued={(url) => !!jobFor(["separate", url])} />
+      {:else if current}
+        {#key current.id}
+          <Mixer
+            song={current}
+            jobFor={(stem) => jobFor(["transcribe", current.id, stem])}
+            ontranscribe={(stem) => queue(["transcribe", current.id, stem], `Notas · ${STEM_INFO[stem].label} · ${current.title}`)}
+          />
+        {/key}
+      {:else}
+        <div class="welcome">
+          <h1>Separa cualquier canción en sus pistas</h1>
+          <p>Voz, batería, bajo, guitarra, piano y el resto. Todo en local, en tu GPU.</p>
+          <div class="cta">
+            <button onclick={pick}>Elegir audio</button>
+            <button class="ghost" onclick={() => (searching = true)}>Buscar en YouTube</button>
+          </div>
         </div>
-      </div>
+      {/if}
+    </main>
+    {#if dragging}
+      <div class="drop"><div>Suelta para separar</div></div>
     {/if}
-  </main>
-  {#if dragging}
-    <div class="drop"><div>Suelta para separar</div></div>
-  {/if}
-</div>
+  </div>
+{/if}
 
 <style>
   :global(:root) {

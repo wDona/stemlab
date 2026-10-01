@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { readJson, writeJson, type Song } from "./engine";
+  import { libraryPath, readJson, writeJson, type Song } from "./engine";
 
   export type Job = {
     args: string[]; // subcomando de engine.py
@@ -28,7 +28,6 @@
 
   // --- carpetas: solo organizan la barra lateral; las canciones no se mueven en disco ---
   type Folder = { id: string; name: string; songs: string[]; open: boolean };
-  const LIBRARY = "/data/stemlab/library.json";
   let folders = $state<Folder[]>([]);
   let root = $state<string[]>([]); // orden de las canciones fuera de carpetas
   let loaded = false;
@@ -54,14 +53,14 @@
   });
   let dropTarget = $state<string | null>(null); // carpeta, "root" o "song:<id>" bajo lo que se arrastra
 
-  readJson(LIBRARY, { folders: [] as Folder[], root: [] as string[] }).then((l) => {
+  readJson(libraryPath(), { folders: [] as Folder[], root: [] as string[] }).then((l) => {
     folders = l.folders;
     root = l.root;
     loaded = true;
   });
   function save() {
     root = loose.map((s) => s.id); // fija el orden visible (incluye canciones nuevas, al final)
-    if (loaded) void writeJson(LIBRARY, { folders: $state.snapshot(folders), root: $state.snapshot(root) });
+    if (loaded) void writeJson(libraryPath(), { folders: $state.snapshot(folders), root: $state.snapshot(root) });
   }
 
   // canciones borradas fuera de las carpetas (sin guardar: se limpia en el próximo cambio)

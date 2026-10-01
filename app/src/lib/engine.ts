@@ -56,7 +56,7 @@ export const STEM_INFO: Record<string, { label: string; color: string }> = {
 /** Escribe en la terminal de la app (stderr de Rust). */
 export const log = (msg: string) => void invoke("log", { msg });
 
-/** JSON de /data/stemlab; `fallback` si no existe o está roto. */
+/** JSON de la carpeta de datos; `fallback` si no existe o está roto. */
 export async function readJson<T>(path: string, fallback: T): Promise<T> {
   try {
     return { ...fallback, ...JSON.parse(new TextDecoder().decode(await invoke<ArrayBuffer>("read_file", { path }))) };
@@ -70,4 +70,11 @@ export const writeJson = (path: string, data: unknown) =>
     headers: { path: encodeURIComponent(path) },
   }).catch((e) => log(`guardar ${path}: ${e}`));
 
-export const SETTINGS = "/data/stemlab/settings.json";
+/** Carpeta de datos (la decide Rust: STEMLAB_DATA, /data/stemlab o ~/.local/share/stemlab). La página la
+ * carga antes de montar nada, así que dentro de los componentes ya está rellena. */
+export const paths = { data: "" };
+export async function initPaths() {
+  paths.data = await invoke<string>("data_dir_cmd");
+}
+export const settingsPath = () => `${paths.data}/settings.json`;
+export const libraryPath = () => `${paths.data}/library.json`;

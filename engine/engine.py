@@ -11,6 +11,7 @@
 """
 import fcntl
 import json
+import os
 import time
 import re
 import subprocess
@@ -19,7 +20,11 @@ import unicodedata
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 
-DATA = Path("/data/stemlab")
+# la app pasa STEMLAB_DATA; a mano, el mismo criterio que la app
+DATA = Path(
+    os.environ.get("STEMLAB_DATA")
+    or ("/data/stemlab" if Path("/data/stemlab").is_dir() else Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "stemlab")
+)
 SONGS = DATA / "songs"
 MODELS = DATA / "models"
 DOWNLOADS = DATA / "downloads"
@@ -228,7 +233,8 @@ def sing_lyrics(vocals):
     import whisper
 
     with gpu_lock(), redirect_stdout(sys.stderr):
-        model = whisper.load_model("turbo", device="cuda", download_root=str(MODELS / "whisper"))
+        device = "cuda" if torch.cuda.is_available() else "cpu"  # sin GPU va, pero mucho más lento
+        model = whisper.load_model("turbo", device=device, download_root=str(MODELS / "whisper"))
         r = model.transcribe(str(vocals), word_timestamps=True, condition_on_previous_text=False)
         del model
         torch.cuda.empty_cache()
