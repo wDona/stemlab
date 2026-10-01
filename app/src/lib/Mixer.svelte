@@ -5,6 +5,7 @@
   import type { Job } from "./Library.svelte";
   import Roll from "./Roll.svelte";
   import Score from "./Score.svelte";
+  import Transport from "./Transport.svelte";
   import { DecodeError, Player } from "./player";
   import Waveform from "./Waveform.svelte";
 
@@ -139,7 +140,6 @@
   }
 
   const seek = (f: number) => player.seek(f * duration);
-  const fmt = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
   function onkey(e: KeyboardEvent) {
     if (e.code === "Space" && !(e.target instanceof HTMLInputElement)) {
@@ -164,33 +164,22 @@
   </div>
 </header>
 
-<section class="transport">
-  <button class="play" onclick={toggle} disabled={loading} aria-label={playing ? "Pausa" : "Reproducir"}>
-    {#if playing}
-      <svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
-    {:else}
-      <svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" /></svg>
-    {/if}
-  </button>
-  <span class="clock">{fmt(time)} <span class="muted">/ {fmt(duration)}</span></span>
-  <input
-    class="scrub"
-    type="range"
-    min="0"
-    max={duration || 1}
-    step="0.01"
-    value={time}
-    oninput={(e) => player.seek(+e.currentTarget.value)}
-    disabled={loading}
-  />
-  <button
-    class="ghost"
-    class:active={showRoll}
-    disabled={!hasRoll || loading}
-    title={hasRoll ? "Notas cayendo sobre un teclado" : "Saca las notas de alguna pista primero"}
-    onclick={() => (showRoll = !showRoll)}>🎹 Piano roll</button
-  >
-</section>
+<div class="bar">
+  <Transport {playing} {time} {duration} disabled={loading} ontoggle={toggle} onseek={(t) => player.seek(t)}>
+    <button
+      class="ghost"
+      class:active={showRoll}
+      disabled={!hasRoll || loading}
+      title={hasRoll ? "Notas cayendo sobre un teclado" : "Saca las notas de alguna pista primero"}
+      onclick={() => (showRoll = !showRoll)}>🎹 Piano roll</button
+    >
+  </Transport>
+</div>
+
+<!-- los mismos controles, dentro de las vistas a pantalla completa -->
+{#snippet controls()}
+  <Transport {playing} {time} {duration} disabled={loading} ontoggle={toggle} onseek={(t) => player.seek(t)} />
+{/snippet}
 
 {#if loadError}
   <p class="error">No se pudieron cargar las pistas: {loadError}</p>
@@ -219,7 +208,7 @@
               {#if job?.error}Reintentar notas
               {:else if job}{job.step ? `${job.label}…` : "En cola…"}
               {:else if st.score}{scoreOf === st.name ? "Ocultar partitura" : "Ver partitura"}
-              {:else}♪ Sacar notas{/if}
+              {:else}♪ Sacar notas{st.name === "vocals" ? " y letra" : ""}{/if}
             </button>
           {/if}
         </div>
@@ -234,13 +223,22 @@
     <Roll
       {player}
       tracks={rollTracks}
+      {controls}
       ontoggle={(stem) => (rollHidden[stem] = !rollHidden[stem])}
       onclose={() => (showRoll = false)}
     />
   {/if}
   {#if scoreStem}
-    {#key `${scoreStem.score}:${scoreStem.notes}`}
-      <Score {song} stem={scoreStem} onclose={() => (scoreOf = null)} />
+    {#key `${scoreStem.score}:${scoreStem.version}`}
+      <Score
+        {song}
+        stem={scoreStem}
+        {player}
+        {controls}
+        busy={!!jobFor(scoreStem.name) && !jobFor(scoreStem.name)?.error}
+        onredo={() => ontranscribe(scoreStem.name)}
+        onclose={() => (scoreOf = null)}
+      />
     {/key}
   {/if}
 {/if}
@@ -251,22 +249,7 @@
   .sub { margin: 4px 0 0; color: var(--text-2); font-size: 13px; }
   .actions { display: flex; gap: 8px; flex-shrink: 0; }
 
-  .transport {
-    display: flex; align-items: center; gap: 16px; margin: 24px 0 18px;
-    padding: 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-  }
-  .play {
-    width: 44px; height: 44px; border-radius: 50%; border: 0; display: grid; place-items: center;
-    background: var(--accent-grad); color: white; cursor: pointer; flex-shrink: 0;
-    box-shadow: 0 6px 20px -6px var(--accent);
-  }
-  .play svg { width: 20px; height: 20px; fill: currentColor; }
-  .play:disabled { opacity: 0.4; cursor: default; }
-  .clock { font-variant-numeric: tabular-nums; font-size: 14px; min-width: 92px; }
-  .muted { color: var(--text-3); }
-  .scrub { flex: 1; }
-  .transport .ghost.active { color: var(--text); border-color: var(--accent); }
-  .transport .ghost:disabled { opacity: 0.4; cursor: default; }
+  .bar { margin: 24px 0 18px; }
 
   .lanes { display: flex; flex-direction: column; gap: 8px; }
   .lane {

@@ -131,6 +131,41 @@ fn read_file(path: String) -> Result<tauri::ipc::Response, String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Escribe bytes crudos (cuerpo de la petición) en `path`, dentro de /data/stemlab.
+/// La ruta va en la cabecera `path` codificada con encodeURIComponent.
+#[tauri::command]
+fn write_file(request: tauri::ipc::Request) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("se esperaban bytes".into());
+    };
+    let raw = request.headers().get("path").and_then(|v| v.to_str().ok()).ok_or("falta la cabecera path")?;
+    let path = PathBuf::from(percent_decode(raw));
+    let dir = path.parent().and_then(|d| std::fs::canonicalize(d).ok()).ok_or("carpeta inexistente")?;
+    if !dir.starts_with("/data/stemlab") {
+        return Err(format!("fuera de /data/stemlab: {}", path.display()));
+    }
+    std::fs::write(dir.join(path.file_name().ok_or("sin nombre")?), data).map_err(|e| e.to_string())
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match (b[i], s.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())) {
+            (b'%', Some(v)) => {
+                out.push(v);
+                i += 3;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Errores del frontend a la terminal.
 #[tauri::command]
 fn log(msg: String) {
@@ -142,7 +177,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![engine, cancel, cancel_all, read_file, log])
+        .invoke_handler(tauri::generate_handler![engine, cancel, cancel_all, read_file, write_file, log])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -150,6 +185,12 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_percent() {
+        assert_eq!(percent_decode("%2Fdata%2Fstemlab%2F%C3%B1.pdf"), "/data/stemlab/ñ.pdf");
+        assert_eq!(percent_decode("a%zz"), "a%zz");
+    }
 
     #[test]
     fn parses_tqdm() {

@@ -9,6 +9,7 @@ export type Stem = {
   midi?: string;
   roll?: string; // notas con tiempos reales (JSON) para el piano roll
   notes?: number;
+  version?: number; // hora de la última transcripción
 };
 export type Song = { id: string; title: string; dir: string; mix: string; bpm?: number; stems: Stem[] };
 

@@ -12,7 +12,7 @@
     error?: string;
   };
 
-  let { songs, jobs, selected, searching, onselect, onadd, onsearch, ondismiss }: {
+  let { songs, jobs, selected, searching, onselect, onadd, onsearch, ondismiss, ondelete }: {
     songs: Song[];
     jobs: Job[];
     selected: string | null;
@@ -21,6 +21,7 @@
     onadd: () => void;
     onsearch: () => void;
     ondismiss: (job: Job) => void;
+    ondelete: (song: Song) => void;
   } = $props();
 
   const progress = (j: Job) => (j.step ? ((j.step - 1 + j.pct / 100) / j.total) * 100 : 0);
@@ -65,12 +66,17 @@
 
   <h2>Biblioteca</h2>
   {#each songs as song (song.id)}
-    <button class="song" class:active={song.id === selected} onclick={() => onselect(song.id)}>
-      <span class="title">{song.title}</span>
-      <span class="chips">
-        {#each song.stems.filter((s) => s.present) as s}<i class="c-{s.name}"></i>{/each}
-      </span>
-    </button>
+    <div class="item">
+      <button class="song" class:active={song.id === selected} onclick={() => onselect(song.id)}>
+        <span class="title">{song.title}</span>
+        <span class="chips">
+          {#each song.stems.filter((s) => s.present) as s}<i class="c-{s.name}"></i>{/each}
+        </span>
+      </button>
+      <button class="del" onclick={() => ondelete(song)} title="Eliminar canción" aria-label="Eliminar {song.title}">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>
+      </button>
+    </div>
   {:else}
     <p class="empty">Aún no hay canciones.</p>
   {/each}
@@ -114,6 +120,16 @@
     border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--text); cursor: pointer;
   }
   .song:hover { background: var(--panel); }
+  .item { position: relative; }
+  .item .song { padding-right: 38px; }
+  .del {
+    position: absolute; right: 6px; top: 50%; translate: 0 -50%; width: 28px; height: 28px; border-radius: 8px;
+    display: grid; place-items: center; border: 0; background: transparent; color: var(--text-3); cursor: pointer;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .item:hover .del, .del:focus-visible { opacity: 1; }
+  .del:hover { color: #ff6b6b; background: #ff6b6b1a; }
+  .del svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
   .song.active { background: var(--panel-hi); border-color: var(--line); }
   .title { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chips { display: flex; gap: 4px; }

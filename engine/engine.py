@@ -4,10 +4,12 @@
     engine.py search <texto|url>   busca en YouTube
     engine.py transcribe <song_id> <pista>  notas -> MusicXML + MIDI en scores/
     engine.py fix <song_id>      reconvierte mezcla y pistas a WAV que la app pueda reproducir
+    engine.py delete <song_id>     borra la canción del disco
     engine.py list               canciones ya procesadas
 """
 import fcntl
 import json
+import time
 import re
 import subprocess
 import sys
@@ -218,15 +220,71 @@ def song_tempo(mix):
     return round(bpm)
 
 
-def notes_to_score(notes, bpm, cfg, title):
-    """Notas (inicio s, fin s, midi, ...) -> partitura music21 en 4/4 cuantizada a GRID."""
+def sing_lyrics(vocals):
+    """Whisper sobre la voz aislada -> ([(inicio s, fin s, palabra)], idioma). En GPU."""
+    import torch
+    import whisper
+
+    with gpu_lock(), redirect_stdout(sys.stderr):
+        model = whisper.load_model("turbo", device="cuda", download_root=str(MODELS / "whisper"))
+        r = model.transcribe(str(vocals), word_timestamps=True, condition_on_previous_text=False)
+        del model
+        torch.cuda.empty_cache()
+    words = [(w["start"], w["end"], w["word"].strip()) for seg in r["segments"] for w in seg["words"] if w["word"].strip()]
+    return words, r["language"]
+
+
+def syllables(word, lang):
+    """'canciones' -> ['can', 'cio', 'nes']. Sin diccionario para el idioma: la palabra entera."""
+    import pyphen
+
+    code = pyphen.language_fallback(lang)
+    core = word.strip(".,;:!?¡¿\"()")
+    if not code or len(core) < 3:
+        return [word]
+    parts = pyphen.Pyphen(lang=code, left=1, right=1).inserted(core).split("-")
+    parts[0] = word[: word.index(core)] + parts[0] if core in word else parts[0]  # puntuación delante/detrás
+    parts[-1] += word[word.index(core) + len(core):] if core in word else ""
+    return parts
+
+
+def assign_lyrics(notes, words, lang):
+    """Reparte las sílabas de cada palabra entre las notas que suenan mientras se canta.
+    Devuelve {índice de nota: (texto, syllabic)} con syllabic en single/begin/middle/end (MusicXML).
+    Más notas que sílabas: el resto es melisma. Menos: las sílabas sobrantes van juntas en la última."""
+    out = {}
+    last = -1
+    for start, end, word in words:
+        cands = [i for i, n in enumerate(notes) if i > last and start - 0.15 <= n[0] < end]
+        if not cands:  # basic-pitch no vio nota justo ahí: la más cercana libre
+            near = [i for i, n in enumerate(notes) if i > last and abs(n[0] - start) < 0.3]
+            cands = near[:1]
+        if not cands:
+            continue
+        syl = syllables(word, lang)
+        if len(syl) > len(cands):
+            syl = syl[: len(cands) - 1] + ["".join(syl[len(cands) - 1 :])]
+        for j, text in enumerate(syl):
+            kind = "single" if len(syl) == 1 else "begin" if j == 0 else "end" if j == len(syl) - 1 else "middle"
+            out[cands[j]] = (text, kind)
+        last = cands[len(syl) - 1]
+    return out
+
+
+def notes_to_score(notes, bpm, cfg, title, lyrics=None):
+    """Notas (inicio s, fin s, midi, ...) -> partitura music21 en 4/4 cuantizada a GRID.
+    `lyrics`: {índice de nota: (texto, syllabic)}, se escribe bajo cada nota."""
     from music21 import chord, instrument, meter, metadata, note, stream, tempo
 
+    lyrics = lyrics or {}
     q = lambda t: round(float(t) * bpm / 60 * GRID) / GRID  # segundos -> negras en la rejilla
     groups = {}
-    for start, end, pitch, *_ in notes:
+    sung = {}  # onset -> sílaba
+    for i, (start, end, pitch, *_) in enumerate(notes):
         on, off = q(start), q(end)
         groups.setdefault(on, []).append((int(pitch), max(off - on, 1 / GRID)))  # music21 no acepta np.int64
+        if i in lyrics and on not in sung:
+            sung[on] = lyrics[i]
     onsets = sorted(groups)
 
     part = stream.Part()
@@ -240,6 +298,9 @@ def notes_to_score(notes, bpm, cfg, title):
             dur = min(dur, onsets[i + 1] - on)
         el = note.Note(pitches[0]) if len(pitches) == 1 else chord.Chord(pitches)
         el.quarterLength = dur
+        if on in sung:
+            text, kind = sung[on]
+            el.lyrics.append(note.Lyric(text=text, syllabic=kind))
         part.insert(on, el)
 
     score = stream.Score()
@@ -262,10 +323,11 @@ def transcribe(song_id, stem):
     cfg = TRANSCRIBE[stem]
     lo, hi = cfg["range"]
 
-    emit("progress", step=1, total=3, label="Detectando tempo")
+    total = 4 if stem == "vocals" else 3
+    emit("progress", step=1, total=total, label="Detectando tempo")
     bpm = meta.get("bpm") or song_tempo(out / meta["mix"])
 
-    emit("progress", step=2, total=3, label="Detectando notas")
+    emit("progress", step=2, total=total, label="Detectando notas")
     with redirect_stdout(sys.stderr):  # basic-pitch imprime por stdout, que es nuestro canal
         _, midi, notes = predict(
             str(out / "stems" / f"{stem}.wav"),
@@ -281,11 +343,22 @@ def transcribe(song_id, stem):
     if not notes:
         raise RuntimeError("no se detectaron notas en esta pista")
 
-    emit("progress", step=3, total=3, label="Escribiendo partitura")
+    lyrics = {}
+    if stem == "vocals":
+        emit("progress", step=3, total=total, label="Transcribiendo letra")
+        words, lang = sing_lyrics(out / "stems" / "vocals.wav")
+        lyrics = assign_lyrics(notes, words, lang)
+        (out / "scores").mkdir(exist_ok=True)
+        (out / "scores" / "vocals.lyrics.json").write_text(
+            json.dumps({"language": lang, "words": [[round(a, 2), round(b, 2), w] for a, b, w in words]}, ensure_ascii=False)
+        )
+        meta["language"] = lang
+
+    emit("progress", step=total, total=total, label="Escribiendo partitura")
     scores = out / "scores"
     scores.mkdir(exist_ok=True)
     midi.write(str(scores / f"{stem}.mid"))
-    notes_to_score(notes, bpm, cfg, meta["title"]).write("musicxml", fp=str(scores / f"{stem}.musicxml"))
+    notes_to_score(notes, bpm, cfg, meta["title"], lyrics).write("musicxml", fp=str(scores / f"{stem}.musicxml"))
     # tiempos reales (sin cuantizar) para el piano roll: [inicio s, fin s, nota midi, intensidad]
     roll = [[round(float(a), 3), round(float(b), 3), int(p), round(float(v), 2)] for a, b, p, v, *_ in notes]
     (scores / f"{stem}.notes.json").write_text(json.dumps(roll))
@@ -297,6 +370,7 @@ def transcribe(song_id, stem):
             s["midi"] = f"scores/{stem}.mid"
             s["roll"] = f"scores/{stem}.notes.json"
             s["notes"] = len(notes)
+            s["version"] = int(time.time())  # la app recarga la partitura cuando cambia
     meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
     emit("done", song=with_dir(meta))
 
@@ -314,6 +388,17 @@ def with_dir(meta):
     return {**meta, "dir": str(SONGS / meta["id"])}
 
 
+def delete(song_id):
+    """Borra la canción entera (mezcla, pistas, partituras)."""
+    import shutil
+
+    target = (SONGS / song_id).resolve()
+    if target.parent != SONGS.resolve() or not target.is_dir():  # nada de "../" ni rutas raras
+        raise ValueError(f"canción desconocida: {song_id}")
+    shutil.rmtree(target)
+    emit("done", deleted=song_id)
+
+
 def list_songs():
     songs = [with_dir(json.loads(p.read_text())) for p in sorted(SONGS.glob("*/meta.json"))]
     emit("done", songs=songs)
@@ -321,7 +406,7 @@ def list_songs():
 
 def main():
     cmd, *args = sys.argv[1:] or ["list"]
-    commands = {"separate": separate, "fix": fix, "list": list_songs, "search": search, "transcribe": transcribe}
+    commands = {"separate": separate, "fix": fix, "list": list_songs, "search": search, "transcribe": transcribe, "delete": delete}
     try:
         if cmd not in commands:
             raise ValueError(f"subcomando desconocido: {cmd}")

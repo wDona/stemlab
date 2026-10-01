@@ -11,4 +11,30 @@ measures = score.parts[0].getElementsByClass("Measure")
 assert len(measures) == 1, len(measures)
 assert [n.pitch.midi for n in measures[0].notes] == [60, 61, 62, 63]
 assert all(n.quarterLength == 1 for n in measures[0].notes)
+
+# letra: sílabas repartidas por nota, con su tipo para MusicXML
+assert engine.syllables("canciones,", "es") == ["can", "cio", "nes,"]
+assert engine.syllables("yo", "es") == ["yo"]
+notes = [(0.0, 0.3, 60, 1), (0.3, 0.6, 62, 1), (0.6, 0.9, 64, 1), (0.9, 1.2, 65, 1), (1.5, 2.0, 67, 1)]
+words = [(0.0, 0.9, "canciones"), (1.5, 2.0, "yo")]
+got = engine.assign_lyrics(notes, words, "es")
+assert got == {0: ("can", "begin"), 1: ("cio", "middle"), 2: ("nes", "end"), 4: ("yo", "single")}, got
+# menos notas que sílabas: lo que sobra va junto en la última
+assert engine.assign_lyrics(notes[:2], [(0.0, 0.6, "canciones")], "es") == {0: ("can", "begin"), 1: ("ciones", "end")}
+# y llega a la partitura
+score = engine.notes_to_score(notes, 120, engine.TRANSCRIBE["vocals"], "t", got)
+sung = [(n.lyric, n.lyrics[0].syllabic) for n in score.recurse().notes if n.lyrics]
+assert sung == [("can", "begin"), ("cio", "middle"), ("nes", "end"), ("yo", "single")], sung
+
+# borrar: solo carpetas de canción, nunca rutas que salgan de songs/
+(engine.SONGS / "zz-test-borrar" / "stems").mkdir(parents=True, exist_ok=True)
+engine.delete("zz-test-borrar")
+assert not (engine.SONGS / "zz-test-borrar").exists()
+for bad in ["..", "../models", "", "no-existe-zz"]:
+    try:
+        engine.delete(bad)
+        raise AssertionError(f"borró {bad!r}")
+    except ValueError:
+        pass
+assert engine.MODELS.exists()
 print("ok")

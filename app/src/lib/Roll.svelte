@@ -1,20 +1,33 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import type { Snippet } from "svelte";
+  import { setWindowFullscreen } from "./fullscreen";
   import type { Player } from "./player";
 
   type Note = [start: number, end: number, pitch: number, velocity: number];
   type Track = { stem: string; name: string; color: string; path: string; hidden: boolean };
 
-  let { player, tracks, ontoggle, onclose }: {
+  let { player, tracks, controls, ontoggle, onclose }: {
     player: Player;
     tracks: Track[];
+    controls: Snippet; // transporte, para la pantalla completa
     ontoggle: (stem: string) => void;
     onclose: () => void;
   } = $props();
 
-  const WINDOW = 2.5; // segundos visibles por encima del teclado
   const KEYS_H = 90;
-  const HEIGHT = 380;
+  let fullscreen = $state(false);
+  let windowSec = $state(2.5); // segundos visibles por encima del teclado: más = notas más lentas
+  let fsHeight = $state(0);
+  const height = $derived(fullscreen ? fsHeight : 380);
+
+  function setFullscreen(on: boolean) {
+    fullscreen = on;
+    setWindowFullscreen(on);
+  }
+  $effect(() => () => {
+    if (fullscreen) setWindowFullscreen(false); // al cerrar el panel en pantalla completa
+  });
   const BLACK = new Set([1, 3, 6, 8, 10]);
   const isBlack = (p: number) => BLACK.has(p % 12);
 
@@ -60,7 +73,8 @@
   });
 
   $effect(() => {
-    if (!width) return;
+    if (!width || !height) return;
+    const HEIGHT = height;
     const dpr = devicePixelRatio;
     canvas.width = width * dpr;
     canvas.height = HEIGHT * dpr;
@@ -86,11 +100,11 @@
         if (track.hidden) continue;
         // ponytail: recorre todas las notas cada frame; con decenas de miles, búsqueda binaria por inicio
         for (const [start, end, pitch, vel] of notes[track.path] ?? []) {
-          if (end < t || start > t + WINDOW) continue;
+          if (end < t || start > t + windowSec) continue;
           const k = keys.get(pitch);
           if (!k) continue;
-          const bottom = rollH * (1 - (start - t) / WINDOW);
-          const top = rollH * (1 - (end - t) / WINDOW);
+          const bottom = rollH * (1 - (start - t) / windowSec);
+          const top = rollH * (1 - (end - t) / windowSec);
           const on = start <= t && t < end;
           if (on) active.set(pitch, track.color);
           g.globalAlpha = on ? 1 : 0.55 + vel * 0.45;
@@ -133,7 +147,9 @@
   });
 </script>
 
-<section class="roll">
+<svelte:window onkeydown={(e) => e.key === "Escape" && fullscreen && setFullscreen(false)} />
+
+<section class="roll" class:fs={fullscreen}>
   <header>
     <div class="legend">
       <strong>Piano roll</strong>
@@ -144,11 +160,21 @@
       {/each}
       {#if !tracks.length}<small>Ninguna pista con notas suena ahora (revisa M/S).</small>{/if}
     </div>
-    <button class="ghost" onclick={onclose} aria-label="Cerrar">×</button>
+    <div class="tools">
+      <label title="Cuántos segundos de notas se ven antes de sonar">
+        Velocidad
+        <input type="range" min="1" max="6" step="0.5" value={7 - windowSec} oninput={(e) => (windowSec = 7 - +e.currentTarget.value)} />
+      </label>
+      <button class="ghost" onclick={() => setFullscreen(!fullscreen)} title={fullscreen ? "Salir (Esc)" : "Pantalla completa"}>
+        {fullscreen ? "Salir" : "⛶ Pantalla completa"}
+      </button>
+      {#if !fullscreen}<button class="ghost" onclick={onclose} aria-label="Cerrar">×</button>{/if}
+    </div>
   </header>
-  <div bind:clientWidth={width}>
-    <canvas bind:this={canvas} style:height="{HEIGHT}px"></canvas>
+  <div class="stage" bind:clientWidth={width} bind:clientHeight={fsHeight}>
+    <canvas bind:this={canvas} style:height="{height}px"></canvas>
   </div>
+  {#if fullscreen}<footer>{@render controls()}</footer>{/if}
 </section>
 
 <style>
@@ -163,6 +189,13 @@
   .chip.off { opacity: 0.4; text-decoration: line-through; }
   .legend i { width: 9px; height: 9px; border-radius: 50%; }
   .legend small { color: var(--text-3); }
-  header button { padding: 4px 10px; }
+  .tools { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .tools label { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
+  .tools label input { width: 90px; }
+  .tools button { padding: 5px 12px; }
   canvas { width: 100%; display: block; }
+
+  .fs { position: fixed; inset: 0; z-index: 50; margin: 0; border: 0; border-radius: 0; display: flex; flex-direction: column; }
+  .fs .stage { flex: 1; min-height: 0; overflow: hidden; }
+  footer { padding: 12px 16px; border-top: 1px solid var(--line); }
 </style>

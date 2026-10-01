@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { ask, open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { engine, listSongs, log, STEM_INFO, type Song } from "$lib/engine";
   import Library, { type Job } from "$lib/Library.svelte";
@@ -56,6 +56,30 @@
     void runQueue();
   }
 
+  async function deleteSong(song: Song) {
+    const ok = await ask(`Se borrarán sus pistas, partituras y letra del disco. No se puede deshacer.`, {
+      title: `¿Eliminar «${song.title}»?`,
+      kind: "warning",
+      okLabel: "Eliminar",
+      cancelLabel: "Cancelar",
+    });
+    if (!ok) return;
+    // primero fuera de la cola lo que la use (transcripciones), para que nada escriba en la carpeta borrada
+    for (const j of jobs.filter((j) => j.args[0] === "transcribe" && j.args[1] === song.id)) {
+      jobs.splice(jobs.indexOf(j), 1);
+      await invoke("cancel", { id: j.key });
+    }
+    try {
+      await engine(["delete", song.id]);
+    } catch (e) {
+      log(`borrar ${song.id}: ${e}`);
+      return;
+    }
+    const i = songs.findIndex((s) => s.id === song.id);
+    songs = songs.filter((s) => s.id !== song.id);
+    if (selected === song.id) selected = songs[Math.min(i, songs.length - 1)]?.id ?? null;
+  }
+
   const jobFor = (args: string[]) => jobs.find((j) => j.key === args.join("\0"));
 
   // una operación cada vez: la GPU no aguanta separaciones en paralelo
@@ -99,6 +123,7 @@
     }}
     onadd={pick}
     onsearch={() => (searching = true)}
+    ondelete={deleteSong}
     ondismiss={(j) => {
       jobs.splice(jobs.indexOf(j), 1);
       void invoke("cancel", { id: j.key }); // si estaba en marcha, mata el proceso
